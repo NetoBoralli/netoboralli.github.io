@@ -1,0 +1,40 @@
+# nightshift/nightshift.conf — the ONLY repo-specific Night Shift file.
+# Sourced by run.sh. /nightshift-init writes this for you; edit freely after.
+# The values below are an EXAMPLE (a Django + Celery + pnpm-frontend repo) —
+# replace them with your repo's real commands.
+
+# Repo root is auto-detected from git. Uncomment only to override:
+# REPO_DIR=""
+
+# The conventions/contract doc the agent must honor ("" if none):
+CONVENTIONS_DOC="CLAUDE.md"
+
+# GATES — commands that MUST pass before any commit, ONE PER LINE, in run order.
+# Use the project's REAL test / static-check / lint / typecheck commands.
+GATES="bash core/tests/checks/run_all.sh
+./venv/bin/python core/tests/run_all_tests.py -j 4 --continue-on-failure"
+
+# ALLOW_EXTRA — extra commands the agent needs, comma-separated, Bash(prefix *)
+# form. Add this repo's language / test / build / migration commands. (The base
+# list already covers git add|commit, file reads, grep/ls/cat, curl localhost.)
+ALLOW_EXTRA="Bash(./venv/bin/python *),Bash(bash core/tests/checks/*),Bash(pnpm *),Bash(npx *)"
+
+# DENY_EXTRA — THE SAFETY LIST. Block everything destructive in THIS repo:
+# db resets, data wipes, destructive migrations. The base list already blocks
+# git push / reset --hard / clean / stash / restore, rm, sudo, and docker
+# down|volume|prune|exec|rm. DENY always wins over ALLOW.
+DENY_EXTRA="Bash(*reset_db*),Bash(*manage.py flush*),Bash(*migrate* zero*),Bash(*manage.py sqlflush*),Bash(*manage.py dbshell*),Bash(*manage.py shell*),Bash(*loaddata*),Bash(*dumpdata*),Bash(dropdb*),Bash(psql*),Bash(*DROP *),Bash(*TRUNCATE *),Bash(*DELETE FROM*)"
+
+# DOCKER_RESTART_SERVICES — worker/queue services to restart so they pick up new
+# code before the gates (space-separated; "" if none). Enables restart/ps/logs.
+DOCKER_RESTART_SERVICES="celery_worker celery_categorization celery_beat"
+
+# EXTRA_DIRS — sibling repos to mount via --add-dir for cross-repo work
+# (space-separated; used only with --with-extra-dirs). "" if none.
+EXTRA_DIRS=""
+
+# Tunables
+MODEL="sonnet"      # lean default; "opus" for hard nights (much pricier)
+MAX_ITERS=12
+ITER_TIMEOUT=2400   # seconds per task
+ITER_BUDGET=4       # USD per iteration
