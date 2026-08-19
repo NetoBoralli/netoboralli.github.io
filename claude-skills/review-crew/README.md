@@ -1,0 +1,104 @@
+# review-crew
+
+A review gate for a slice of work: one general reviewer, six specialists, an
+intent advocate, and an adversarial verifier that kills the findings which do not
+survive contact with the actual code.
+
+## Install
+
+Copy this folder to `~/.claude/skills/review-crew` (available in every project)
+or `<repo>/.claude/skills/review-crew` (that repo only). Nothing else — the
+skill writes nothing into the repo it reviews.
+
+## Use
+
+```bash
+/review-crew                      # standard depth, scope auto-detected
+/review-crew --depth deep
+/review-crew --depth quick
+/review-crew HEAD~3..HEAD         # explicit range
+/review-crew --model opus --effort high    # flat override, ignores the tiers
+```
+
+Scope resolves in this order: an explicit argument, then staged changes, then
+the branch against its default branch, then the working tree. It says which it
+picked.
+
+## Depth
+
+Depth sets model and effort per stage rather than one dial for everything —
+quality goes where it pays. The general pass and the verifier decide whether the
+output is trustworthy; the specialist sweep is broad and shallow.
+
+| Depth | General | Specialists | Verify | Verification |
+|---|---|---|---|---|
+| `quick` | sonnet / medium | sonnet / low | sonnet / medium | batched per persona |
+| `standard` | opus / medium | sonnet / medium | opus / high | per finding |
+| `deep` | opus / high | sonnet / high | opus / xhigh | per finding |
+| `max` | opus / xhigh | opus / high | opus / max | per finding, 3 votes |
+
+`quick` is for a small slice you mostly trust. `standard` is the default.
+`deep` is for anything customer-facing, security-relevant, or hard to reverse.
+`max` is for a migration you cannot roll back.
+
+## The crew
+
+| Persona | Owns |
+|---|---|
+| **general** | Ordinary quality — bugs, placement, DRY, YAGNI, idiom, dead code. Runs first, alone. |
+| **test** | Whether tests would fail if the code were wrong. Hunts vacuous assertions first. |
+| **code** | Design, invariants, coupling, concurrency, failure modes, blast radius. |
+| **database** | Constraints as enforcement, migration safety and reversibility, types, indexes. |
+| **security** | Authorization, escalation, injection, output encoding, SSRF, secrets, exposure. |
+| **design** | States, feedback, accessibility, meaning not carried by colour, consistency. |
+| **infra** | Config completeness, build, resources, deploy order, observability, CI. |
+| **intent** | Does this match the task, and can a human review it tomorrow. Runs last. |
+| **verifier** | Refutes findings. Defaults to refuted when unsure. |
+
+## Why the verifier exists
+
+A panel of eight reviewers will produce findings that are confidently argued and
+wrong: code misread, a case already handled twenty lines up, a deliberate
+decision reported as an oversight. Those are indistinguishable from real findings
+until someone opens the file.
+
+Every finding is therefore sent to a verifier prompted to refute it, which must
+read the code and reconstruct the failure before the finding survives. **A high
+refutation rate is the system working.** The count is reported.
+
+## What it does and does not do
+
+It **stages** the result. It does not commit and never pushes — the suggested
+message goes to `.git/REVIEW_CREW_MSG` and committing is yours.
+
+It fixes what survives verification, in one pass, applied by the orchestrator
+rather than by the subagents — parallel agents editing the same files collide,
+and a slice should land as one coherent change rather than eight.
+
+It runs the project's own gates afterwards and reports the output honestly. It
+will not weaken a test to make one pass, and it will not silently fix a
+pre-existing problem the diff merely touched — that gets flagged separately,
+because a fix nobody asked for makes a diff harder to review.
+
+## One implementation detail that is not optional
+
+Reviewers run as background subagents, and **a background subagent cannot answer
+a permission prompt**. Point one at a path outside the repo — this skill's own
+`personas/` folder, a diff written to `/tmp`, anything under `~` — and it stalls
+on its first read having produced nothing, while you get permission prompts you
+did not ask for.
+
+So the skill copies the persona briefs and the diff into
+`<repo>/.review-crew-run/` before spawning anything, and deletes that directory
+before staging. Everything a reviewer touches is inside the working directory.
+
+This is the first thing that went wrong when the skill was first run: two of
+eight reviewers hung silently. If you fork this or write something like it, that
+is the trap.
+
+## Tuning
+
+The personas are plain markdown in `personas/`. Edit them. If your project has a
+recurring failure mode, add it to the relevant persona as a named thing to hunt —
+that is where the value compounds, because a generic reviewer gives generic
+findings.
