@@ -6,9 +6,11 @@ survive contact with the actual code.
 
 ## Install
 
-Copy this folder to `~/.claude/skills/review-crew` (available in every project)
-or `<repo>/.claude/skills/review-crew` (that repo only). Nothing else — the
-skill writes nothing into the repo it reviews.
+Claude Code: copy this folder to `~/.claude/skills/review-crew` (every project)
+or `<repo>/.claude/skills/review-crew` (that repo only). Cursor: same folder,
+`~/.cursor/skills/review-crew` or `<repo>/.cursor/skills/review-crew`. Nothing
+else to configure — the skill writes nothing into the repo it reviews, other
+than a worktree it removes itself (PR mode, below).
 
 ## Use
 
@@ -17,12 +19,33 @@ skill writes nothing into the repo it reviews.
 /review-crew --depth deep
 /review-crew --depth quick
 /review-crew HEAD~3..HEAD         # explicit range
+/review-crew --pr 482             # review a GitHub PR by number
+/review-crew --pr https://github.com/org/repo/pull/482
 /review-crew --model opus --effort high    # flat override, ignores the tiers
 ```
 
-Scope resolves in this order: an explicit argument, then staged changes, then
-the branch against its default branch, then the working tree. It says which it
-picked.
+Scope resolves in this order: a PR link or number, then an explicit argument,
+then staged changes, then the branch against its default branch, then the
+working tree. It says which it picked.
+
+## Claude Code and Cursor
+
+The specialist sweep fans out in parallel using Claude Code's `Workflow` tool.
+Cursor has no equivalent, so under Cursor the same personas run one after
+another in a single session instead — slower, same coverage, nothing to
+configure either way.
+
+## PR mode
+
+Reviewing a PR by link — someone else's, or your own already pushed — checks it
+out into an isolated `git worktree`, never your current working directory, and
+runs the same crew against it there.
+
+It never fixes and never posts. Findings become a drafted review comment
+written next to your repo, plus the exact `gh pr review --comment
+--body-file ...` command to publish it. Posting to someone else's PR is visible
+to them and to everyone watching the repo, so a human decides when that
+happens — the same reason this skill never pushes a local fix.
 
 ## Depth
 
@@ -71,9 +94,11 @@ refutation rate is the system working.** The count is reported.
 It **stages** the result. It does not commit and never pushes — the suggested
 message goes to `.git/REVIEW_CREW_MSG` and committing is yours.
 
-It fixes what survives verification, in one pass, applied by the orchestrator
-rather than by the subagents — parallel agents editing the same files collide,
-and a slice should land as one coherent change rather than eight.
+In local mode, it fixes what survives verification, in one pass, applied by the
+orchestrator rather than by the subagents — parallel agents editing the same
+files collide, and a slice should land as one coherent change rather than
+eight. PR mode never fixes (see above) — there's no standing to change a
+branch that isn't yours.
 
 It runs the project's own gates afterwards and reports the output honestly. It
 will not weaken a test to make one pass, and it will not silently fix a
