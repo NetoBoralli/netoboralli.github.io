@@ -1,6 +1,6 @@
 ---
 name: review-crew
-description: Run a panel of specialist reviewers over a slice of work — one general code reviewer, then six specialists (test, code, database, security, design/UI, infra) in parallel, then an intent advocate — adversarially verify every finding, fix what survives, and run the project's gates. Use when the user asks to "review this slice", "run the crew", "review before I commit", or runs /review-crew. Not a linter and not a bug hunt on its own; it is the gate a slice of work passes through before a human reads it.
+description: Run a panel of reviewers over a slice of work — a local diff or a GitHub PR by link — one general code reviewer, then a chosen subset of specialists (test, code, database, security, design/UI, infra) in parallel, then an intent advocate — adversarially verify every finding, fix what survives (local mode), and run the project's gates. Use when the user asks to "review this slice", "run the crew", "review before I commit", "review this PR", pastes a GitHub PR link, or runs /review-crew. Runs in parallel on Claude Code and sequentially on Cursor. Not a linter and not a bug hunt on its own; it is the gate a slice of work passes through before a human reads it.
 metadata:
   author: Nelson Boralli Neto
   version: "1.0.0"
@@ -35,16 +35,42 @@ reviewable unit. The skill stages it and stops; committing is the human's call.
 
 **Scope.** In order of preference:
 
-1. `$ARGUMENTS` names a range or path → use it (`/review-crew HEAD~3..HEAD`)
-2. Staged changes exist (`git diff --cached --stat`) → review those
-3. On a feature branch with commits ahead of the default branch → review
+1. `$ARGUMENTS` names a GitHub PR (a PR URL, or `--pr <number>`) → **PR mode**,
+   below.
+2. `$ARGUMENTS` names a range or path → use it (`/review-crew HEAD~3..HEAD`)
+3. Staged changes exist (`git diff --cached --stat`) → review those
+4. On a feature branch with commits ahead of the default branch → review
    `<default>...HEAD`
-4. Otherwise → uncommitted working-tree changes
+5. Otherwise → uncommitted working-tree changes
 
 Say which you picked in one line. If the scope is empty, stop and say so — do not
 review a clean tree.
 
-**Depth.** Read from `$ARGUMENTS` (`--depth quick|standard|deep|max`), default
+**PR mode.** A PR under review — someone else's, or your own already pushed —
+gets isolated the same way this skill already isolates everything else: never
+in the directory the user is sitting in.
+
+```bash
+gh pr view <num> --repo <owner/repo> --json title,body,baseRefName,headRefName,url
+git worktree add <tmp-dir> <baseRefName>
+cd <tmp-dir> && gh pr checkout <num> --repo <owner/repo>
+```
+
+From here `<tmp-dir>` *is* `repo` for every step below. Step 1's diff command
+doesn't apply — there is no working-tree diff, the PR's changes are already
+committed on its branch — use `git -C <repo> diff <baseRefName>...HEAD -- . ':(exclude).review-crew-run'`
+instead; everything else in step 1 (copying personas, assembling the packet) is
+identical. The PR's title and body become the task the intent advocate checks
+the diff against.
+
+PR mode changes step 5 and step 7 — read those before running one. Remove the
+worktree in step 7, success or failure; it must not linger in
+`git worktree list`.
+
+**Depth.** `quick` is the right default for most slices: it batches
+verification per persona instead of spawning one verifier per finding, which is
+where most of the agent count goes. Reserve `deep` for schema, auth or anything
+where being wrong is expensive to undo. Read from `$ARGUMENTS` (`--depth quick|standard|deep|max`), default
 `standard`:
 
 | Depth | General | Specialists | Verify | Intent | Verification |
@@ -80,12 +106,18 @@ So before spawning anything:
 mkdir -p <repo>/.review-crew-run/personas
 cp <skill-dir>/personas/*.md <repo>/.review-crew-run/personas/
 git -C <repo> add -N .            # so untracked files appear in the diff
-git -C <repo> diff > <repo>/.review-crew-run/slice.diff
+git -C <repo> diff -- . ':(exclude).review-crew-run' > <repo>/.review-crew-run/slice.diff
 ```
 
 Use `git add -N` deliberately: a new file is invisible to `git diff` until git
 knows it is intended, and a review that silently skips every added file is worse
 than no review.
+
+Exclude `.review-crew-run` from that diff just as deliberately. `git add -N .`
+marks the staging directory intent-to-add too, so without the pathspec the nine
+persona briefs land in the diff and every reviewer reads its own instructions as
+part of the code under review — which is both noise and a way to confuse a
+reviewer about what it is looking at.
 
 Delete `.review-crew-run/` in step 7, before staging. The skill's promise is that
 nothing it writes into the target repo survives the run.
@@ -108,13 +140,35 @@ Keep it factual. Do not summarize the diff — reviewers read the code.
 `workflow.js` in this skill directory as the script, passing the packet and the
 resolved depth as `args`.
 
+**No `Workflow` tool available (e.g. running under Cursor)?** Run the same
+sequencing yourself, in this session, one persona at a time: read
+`<repo>/.review-crew-run/personas/<name>.md`, then the packet and the diff,
+then record that persona's findings before moving to the next. You lose the
+parallelism — specialists that would fan out together now run one after
+another — but not the rigor: same personas, same order, same packet, and
+nothing gets fixed between stages, for the same reason it doesn't in the
+`Workflow` version. Verification (step 3) works the same way: read
+`personas/verifier.md` and adversarially re-examine each finding yourself,
+defaulting to refuted when you cannot confirm it against the actual code.
+
 Sequencing, which is deliberate:
 
 1. **The general reviewer runs first, alone.** Broad quality pass — placement,
    DRY/YAGNI, idioms, error handling, naming, dead code.
-2. **The six specialists run in parallel**, over *the same snapshot* the general
-   reviewer saw. Nothing is fixed in between. If code changed between stages, no
-   finding would be reproducible against the diff the user actually wrote.
+2. **The selected specialists run in parallel**, over *the same snapshot* the
+   general reviewer saw. Nothing is fixed in between. If code changed between
+   stages, no finding would be reproducible against the diff the user actually
+   wrote.
+
+   **Choose them; do not run all six.** Pass `specialists` in `args` — the
+   default is `['security', 'infra']`. Measured across a long run of reviews,
+   `general` and `intent` produced almost every confirmed finding while `test`,
+   `code` and `database` returned empty far more often than not, and running the
+   full set costs six agents plus a verifier per finding they raise. Pick by what
+   the slice touches: `security` for auth, crypto or an upload path, `database`
+   for migrations and constraints, `infra` for CI and containers, `design` for
+   UI, `test` when the tests themselves are the deliverable. `specialists: []`
+   runs general and intent alone.
 3. **The intent advocate runs last**, over the diff *and* the original task.
 
 Every reviewer returns structured findings. A reviewer with nothing to say
@@ -152,6 +206,10 @@ Watch specifically for:
 
 ### Step 5 — Fix
 
+**PR mode does not fix.** You do not have standing to change a branch that
+isn't yours without being asked — not even a good fix. Findings become review
+comments (step 7), not commits. Skip to step 6.
+
 **You apply the fixes, not the subagents.** Parallel agents editing the same
 files collide, and a single commit needs one coherent narrative.
 
@@ -164,27 +222,46 @@ legitimate outcome. Record it in the summary with the reason.
 
 ### Step 6 — Gates
 
-Run every gate found in step 0. All must pass.
+Run every gate found in step 0 inside `<repo>`. All must pass.
 
-A failing gate after fixes means a fix broke something. Diagnose it — do not
-re-run hoping for a different result, and do not weaken a test to make it pass.
-If you cannot resolve it, revert that specific fix, report the finding as
-unfixed, and say why.
+**Local mode:** a failing gate after fixes means a fix broke something.
+Diagnose it — do not re-run hoping for a different result, and do not weaken a
+test to make it pass. If you cannot resolve it, revert that specific fix,
+report the finding as unfixed, and say why.
+
+**PR mode:** you didn't fix anything, so a failing gate is a finding, not
+something to chase down. Report it in the review comment (step 7) the same way
+you'd report any other finding — it's information for the author, not yours to
+resolve.
 
 **Report gate output faithfully.** If tests fail, say so with the output.
 
-### Step 7 — Clean up, stage, and stop
+### Step 7 — Clean up, and stop
 
-Remove `<repo>/.review-crew-run/` first — it is scaffolding, not work product,
-and it must not reach the staged diff.
+**Local mode.** Remove `<repo>/.review-crew-run/` first — it is scaffolding,
+not work product, and it must not reach the staged diff. Then `git add` the
+changes. **Do not commit and never push.** Write the suggested commit message
+to `.git/REVIEW_CREW_MSG` so the user can `git commit -F .git/REVIEW_CREW_MSG`
+if they want it. Follow the repo's existing commit style — read `git log` and
+match it.
 
-Then `git add` the changes. **Do not commit and never push.**
+**PR mode.** There is nothing to stage — step 5 skipped fixing on purpose.
+Instead, draft the review as a GitHub PR comment: adjudicated findings, ranked
+by severity, in the same voice you'd use reporting to a human. Write it
+*outside* the worktree (which is about to be removed), e.g.
+`review-crew-pr-<num>.md` in the directory you started from, and hand back the
+exact command:
 
-Write the suggested commit message to `.git/REVIEW_CREW_MSG` so the user can
-`git commit -F .git/REVIEW_CREW_MSG` if they want it. Follow the repo's existing
-commit style — read `git log` and match it.
+```bash
+gh pr review <num> --repo <owner/repo> --comment --body-file review-crew-pr-<num>.md
+```
 
-Then report:
+**Never run that command yourself.** Posting to someone else's PR is visible to
+them and to everyone watching the repo — the same reason this skill never
+pushes. Draft it, hand back the command, stop. Then remove the worktree:
+`git worktree remove <tmp-dir>` — do this even if the run failed partway.
+
+Then report (both modes):
 
 ```
 Scope     <what was reviewed> (N files, +X/-Y)
@@ -206,7 +283,10 @@ anything you noticed that belongs in a later slice.
 - **Never point a reviewer outside the repo.** A background agent cannot answer
   a permission prompt; it hangs silently and the user gets prompts instead of a
   review. Stage what they need inside the working directory (step 1).
-- **Never commit, never push.** Stage and stop.
+- **Never commit, never push.** Stage and stop (local mode).
+- **PR mode never fixes and never posts.** It drafts a review comment and hands
+  back the `gh pr review` command — the same reason it never pushes. Remove the
+  worktree when done, success or failure.
 - **Never weaken a test to make a gate pass.**
 - **Never fix a pre-existing problem silently.** Flag it; it is not this slice.
 - **A refuted finding is a good outcome**, not a failed review. Report the count.

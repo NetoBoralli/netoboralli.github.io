@@ -1,6 +1,7 @@
 # Claude Code Skills
 
-Agent skills I've built for [Claude Code](https://claude.com/claude-code). Each
+Agent skills I've built for [Claude Code](https://claude.com/claude-code) and
+[Cursor](https://cursor.com) — both read the same `SKILL.md` format. Each
 folder is a self-contained skill: a `SKILL.md` with the instructions (and, where
 needed, supporting templates).
 
@@ -9,15 +10,19 @@ needed, supporting templates).
 Copy any skill folder into your skills directory:
 
 ```bash
-# user-level (available in every project)
+# Claude Code — user-level (every project) or project-level
 cp -R <skill-name> ~/.claude/skills/
-
-# or project-level
 cp -R <skill-name> .claude/skills/
+
+# Cursor — same idea
+cp -R <skill-name> ~/.cursor/skills/
+cp -R <skill-name> .cursor/skills/
 ```
 
-Claude Code picks it up automatically — invoke it by name or let it trigger on
-the situations described in the skill's `description`.
+Either tool picks it up automatically — invoke it by name or let it trigger on
+the situations described in the skill's `description`. A skill that leans on a
+Claude Code-only tool (`review-crew`'s parallel fan-out uses `Workflow`) says so
+in its own `SKILL.md` and gives Cursor a fallback path.
 
 ## Published skills
 
@@ -28,4 +33,6 @@ the situations described in the skill's `description`.
 | [`security-audit`](security-audit/) | End-to-end security audit of the current repo across auth, input validation, secrets, transport, dependencies, infra, and CI/CD, ending in a prioritized mitigation plan. |
 | [`supply-chain-audit`](supply-chain-audit/) | Detects supply-chain compromise — malicious deps, Shai-Hulud-style worms, typosquats, hijacked releases — across npm/pnpm/yarn, pip/uv/poetry, cargo, gomod, composer, and gem. |
 | [`nightshift-init`](nightshift-init/) | Scaffolds the Night Shift autonomous overnight workflow into the current repo, tailored to its stack — runner, reviewer personas, gates, and the `nightshift-spec` skill. |
-| [`review-crew`](review-crew/) | Runs a review panel over a slice of work — a general reviewer, six specialists (test, code, database, security, design, infra), and an intent advocate — adversarially verifies every finding, fixes what survives, and runs the project's gates. |
+| [`review-crew`](review-crew/) | Runs a review panel over a slice of work — a local diff or a GitHub PR by link — a general reviewer, a chosen subset of specialists (test, code, database, security, design, infra), and an intent advocate — adversarially verifies every finding, fixes what survives, and runs the project's gates. Parallel on Claude Code, sequential on Cursor. |
+| [`explain-work`](explain-work/) | Run after finishing a task, before opening the PR — checks the diff against the task it was meant to satisfy and hands back the questions a reviewer would ask. A comprehension check for the engineer, not a review. |
+| [`plan-tasks`](plan-tasks/) | Run at plan time, before code is written — breaks a task down into a grounded, sequenced subtask checklist plus the open questions worth resolving out loud first. |

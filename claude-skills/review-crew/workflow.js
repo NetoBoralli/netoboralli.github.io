@@ -29,7 +29,14 @@ export const meta = {
 // loudly; the agent simply hangs having produced nothing, and the user gets
 // prompts instead of a review. Two of eight reviewers were lost that way.
 
-const { packet, depth = 'standard', repo, tiers } = args
+// `args` arrives as a JSON **string**, not an object, whatever the tool
+// documentation implies. Destructuring it directly yields `undefined` for every
+// key — which fails silently and invisibly: the script simply falls back to its
+// own defaults, so a caller asking for `depth: 'quick'` and one specialist gets
+// the full crew at standard depth and no error to say otherwise. Verified with a
+// zero-agent probe that reported `typeof args === "string"`.
+const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
+const { packet, depth = 'standard', repo, tiers, specialists } = input
 
 // Model and effort per stage. SKILL.md resolves these from --depth (or from a
 // flat --model/--effort override) and passes them in; the fallback here keeps
@@ -150,10 +157,29 @@ const general = await agent(reviewPrompt('general'), {
   ...TIER.general,
 })
 
-// ── 2. The six specialists, in parallel ─────────────────────────────────────
-const SPECIALISTS = ['test', 'code', 'database', 'security', 'design', 'infra']
+// ── 2. The specialists, in parallel ─────────────────────────────────────────
+//
+// Selected, not all six. Running the full set costs six agents plus a verifier
+// per finding, and measured across a long run of reviews most of them returned
+// nothing: `general` and `intent` produced almost every confirmed finding, while
+// `test`, `code` and `database` came back empty far more often than not.
+//
+// So the caller names the ones the slice actually needs — `security` for an
+// upload handler, `database` for a migration, `infra` for CI, `design` for UI —
+// and the default is the two that carry their weight everywhere. Pass
+// `specialists: []` for general + intent alone; pass the full list to get the
+// old behaviour back.
+const ALL_SPECIALISTS = ['test', 'code', 'database', 'security', 'design', 'infra']
+const DEFAULT_SPECIALISTS = ['security', 'infra']
+
+const SPECIALISTS = (specialists ?? DEFAULT_SPECIALISTS).filter(key => {
+  if (ALL_SPECIALISTS.includes(key)) return true
+  log(`unknown specialist ${JSON.stringify(key)} — skipping. Known: ${ALL_SPECIALISTS.join(', ')}`)
+  return false
+})
 
 phase('Specialists')
+if (!SPECIALISTS.length) log('No specialists selected — general and intent only.')
 const specialistResults = await parallel(
   SPECIALISTS.map(key => () =>
     agent(reviewPrompt(key), {
